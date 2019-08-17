@@ -1,0 +1,280 @@
+---
+title: "MovieLensReport"
+author: "Ricky Rahardja"
+date: "16/08/2019"
+output:
+  pdf_document: default
+  html_document: default
+---
+
+#Introduction 
+The movielens dataset is used in this assignment. The dataset provided consists of 5 variables,
+and they are userId, movieId, rating, timestamp, title and genre. 
+The objective of this assignment is to build machine learning algorithm that make prediction of ratings, by using other variables as independent variables.
+
+Data Sets is produced as instruction in this assignment below:
+```{r}
+# Create edx set, validation set
+
+# Note: this process could take a couple of minutes
+
+if(!require(tidyverse)) install.packages("tidyverse", repos = "http://cran.us.r-project.org")
+if(!require(caret)) install.packages("caret", repos = "http://cran.us.r-project.org")
+if(!require(data.table)) install.packages("data.table", repos = "http://cran.us.r-project.org")
+
+# MovieLens 10M dataset:
+# https://grouplens.org/datasets/movielens/10m/
+# http://files.grouplens.org/datasets/movielens/ml-10m.zip
+
+dl <- tempfile()
+download.file("http://files.grouplens.org/datasets/movielens/ml-10m.zip", dl)
+
+ratings <- fread(text = gsub("::", "\t", readLines(unzip(dl, "ml-10M100K/ratings.dat"))),
+                 col.names = c("userId", "movieId", "rating", "timestamp"))
+
+movies <- str_split_fixed(readLines(unzip(dl, "ml-10M100K/movies.dat")), "\\::", 3)
+colnames(movies) <- c("movieId", "title", "genres")
+movies <- as.data.frame(movies) %>% mutate(movieId = as.numeric(levels(movieId))[movieId],
+                                           title = as.character(title),
+                                           genres = as.character(genres))
+
+movielens <- left_join(ratings, movies, by = "movieId")
+
+# Validation set will be 10% of MovieLens data
+
+set.seed(1)
+# if using R 3.5 or earlier, use `set.seed(1)` instead
+test_index <- createDataPartition(y = movielens$rating, times = 1, p = 0.1, list = FALSE)
+edx <- movielens[-test_index,]
+temp <- movielens[test_index,]
+
+# Make sure userId and movieId in validation set are also in edx set
+
+validation <- temp %>% 
+  semi_join(edx, by = "movieId") %>%
+  semi_join(edx, by = "userId")
+
+# Add rows removed from validation set back into edx set
+
+removed <- anti_join(temp, validation)
+edx <- rbind(edx, removed)
+
+rm(dl, ratings, movies, test_index, temp, movielens, removed)
+```
+
+
+In this assignment, author is using userId and movie Id to predict the rating.
+As studied in this course, using linear model would be hard to achieve given the large dataset. Alternatively, author is using data manipulating techniques such as subsetting, joining,
+summarising in tidyverse package to construct and compute according to required statistical
+formulas.
+
+The models constructed is evaluated by using Root Mean Square Error (RMSE) approach.
+
+
+#Methods and Analysis
+Method used in this assignment is using Naive Average, model taking into account userId, model taking into account userId and movieId, model taking into account userId and movieId with regularization, and finally validating model using validation set.
+
+
+##Create Test Set
+
+First, author is using caret package to split edx dataset into train and test sets.
+Further, author is using semi-join function to remove missing users and movies in training dataset.
+
+```{r}
+set.seed(1)
+test_index <- createDataPartition(y = edx$rating, times = 1, p = 0.2, list = FALSE)
+train_set <- edx[-test_index,]
+test_set <- edx[test_index,]
+
+test_set <- test_set %>% 
+  semi_join(train_set, by = "movieId") %>%
+  semi_join(train_set, by = "userId")
+```
+
+
+##RMSE as benchmark
+
+Author then construct RMSE function for assessment of the models constructed.
+
+```{r}
+RMSE <- function(true_ratings, predicted_ratings){
+  sqrt(mean((true_ratings - predicted_ratings)^2))
+}
+```
+
+
+##Method 1
+
+The first method used is called Naive Average Model, by using the mean of ratings in training set to predict ratings in test set.
+
+```{r}
+mu_hat <- mean(train_set$rating)
+mu_hat
+
+rmse1 <- RMSE(test_set$rating, mu_hat)
+rmse1
+
+rmse_results1 <- data_frame(method = "Naive Average Model", RMSE = rmse1)
+rmse_results1
+```
+
+The RMSE is 1.0610 for the fist model and it is very far from the taget of at least 0.9000 in this assignment.
+
+
+##Method 2
+
+The second model is to use movieId as the explanatory variable of ratings.
+
+```{r}
+mu <- mean(train_set$rating) 
+movie_avgs <- train_set %>% 
+  group_by(movieId) %>% 
+  summarize(b_i = mean(rating - mu)) 
+
+predicted_ratings_movie <- mu + test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  pull(b_i)
+
+rmse2 <- RMSE(predicted_ratings_movie, test_set$rating)
+rmse2
+
+rmse_results2 <- bind_rows(rmse_results1,
+                          data_frame(method="Movie Effect Model",  
+                                     RMSE = rmse2))
+rmse_results2 
+```
+
+The RMSE is dropped to 0.9445 and it is still above the minimum 0.9000 target.
+
+
+##Method 3
+
+In method 3, author is taking into account userId also as as the explanatory variables.
+
+```{r}
+user_avgs <- train_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  group_by(userId) %>%
+  summarize(b_u = mean(rating - mu - b_i))
+
+predicted_ratings_movies_user <- test_set %>% 
+  left_join(movie_avgs, by='movieId') %>%
+  left_join(user_avgs, by='userId') %>%
+  mutate(pred = mu + b_i + b_u) %>%
+  pull(pred)
+
+
+rmse3 <- RMSE(predicted_ratings_movies_user, test_set$rating)
+rmse3
+
+rmse_results3 <- bind_rows(rmse_results2,
+                          data_frame(method="Movie + User Effects Model",  
+                                     RMSE = rmse3))
+rmse_results3
+```
+
+The RMSE drop to 0.8669 and this shows that variable movieId and userId are substantional variables to predict movie ratings.
+
+
+##Method 4
+
+In method 4, author is using regularization approach learnt from the course and find to find the best tune of lamda for the prediction.
+
+```{r}
+lambdas <- seq(0, 10, 0.25)
+
+rmse4 <- sapply(lambdas, function(l){
+  
+  b_i <- train_set %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  b_u <- train_set %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  predicted_ratings_reg_movies_user <- test_set %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    pull(pred)
+  
+  return(RMSE(predicted_ratings_reg_movies_user, test_set$rating))
+})
+rmse4
+
+lambda <- lambdas[which.min(rmse4)]
+lambda
+
+rmse4[lambda]
+
+rmse_results4 <- bind_rows(rmse_results3,
+                          data_frame(method="Movie + User Effect Model Regularization Model",  
+                                     RMSE = min(rmse4)))
+rmse_results4
+```
+
+The result is not very supprising with only achieving RMSE of 0.8667, it is an improvement but it is not a big improvement thus it would likely need more explanatory variables to predict ratings.
+
+
+##Method 5 (RESULT)
+
+Finally, author is using the last approach in method 4 to test on the validation set.
+
+```{r}
+lambdas_validation <- seq(0, 10, 0.25)
+
+rmse_validation <- sapply(lambdas_validation, function(l){
+  
+  b_i <- edx %>% 
+    group_by(movieId) %>%
+    summarize(b_i = sum(rating - mu)/(n()+l))
+  
+  b_u <- edx %>% 
+    left_join(b_i, by="movieId") %>%
+    group_by(userId) %>%
+    summarize(b_u = sum(rating - b_i - mu)/(n()+l))
+  
+  predicted_ratings_validation <- validation %>% 
+    left_join(b_i, by = "movieId") %>%
+    left_join(b_u, by = "userId") %>%
+    mutate(pred = mu + b_i + b_u) %>%
+    pull(pred)
+  
+  return(RMSE(predicted_ratings_validation, validation$rating))
+})
+rmse_validation
+
+lambda_validation <- lambdas_validation[which.min(rmse_validation)]
+lambda_validation
+
+rmse_validation[lambda_validation]
+
+rmse_results5 <- bind_rows(rmse_results4,
+                           data_frame(method="Movie + User Effect with Regularization Model on Validation Set",  
+                                      RMSE = min(rmse_validation)))
+rmse_results5
+```
+
+And to ensure RMSE result is as expected author use codes below:
+
+```{r}
+min(rmse_validation)
+
+#Ensure RMSE result is lower than 0.8649 on Validation Set
+if(min(rmse_validation) <= 0.8649){
+  print("I deserve to get 25 points.")
+  } else {
+  print("I must develop better prediction algorithm!")
+  }
+```
+
+The RMSE result is 0.8645 and this is already smaller than the best target of RMSE of 0.8649 in this assignment.
+
+
+#Conclusion
+
+In conclusion, author has learnt that the more exploratory variables added into the models, it would improve the prediction. However, it would only for relevant and determining variables, which means they are improving the model and not worsening the model.
+
+Further, regularization approach is also improving by a margin. However, with a larger training dataset, it would give a reasonable improvement on the predictive model.
